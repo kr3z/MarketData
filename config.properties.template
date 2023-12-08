@@ -1,0 +1,9 @@
+[db]
+db_host=
+db_port=
+db_name=FinnHub
+user=
+password=
+
+[api]
+api_key=
