@@ -37,8 +37,8 @@ class MarketStatus:
 @cacheinit
 class StockSymbol:
     _cache_sql = "SELECT id,uid,hash,update_time FROM Symbol"
-    _insert_sql = "INSERT INTO Symbol(currency,description,displaySymbol,figi,mic,shareClassFIGI,symbol,symbol2,type,hash,update_time,id) VALUES(" + ','.join(["%s"]*12) + ')'
-    _update_sql = "UPDATE Symbol SET currency=%s,description=%s,displaySymbol=%s,figi=%s,mic=%s,shareClassFIGI=%s,symbol=%s,symbol2=%s,type=%s,hash=%s,update_time=%s,update_count=update_count+1 WHERE id=%s"
+    _insert_sql = "INSERT INTO Symbol(currency,description,displaySymbol,figi,mic,shareClassFIGI,symbol,symbol2,type,FinnHubSymbol,hash,update_time,id) VALUES(" + ','.join(["%s"]*13) + ')'
+    _update_sql = "UPDATE Symbol SET currency=%s,description=%s,displaySymbol=%s,figi=%s,mic=%s,shareClassFIGI=%s,symbol=%s,symbol2=%s,type=%s,FinnHubSymbol=%s,hash=%s,update_time=%s,update_count=update_count+1 WHERE id=%s"
 
     @classmethod
     def cache_init(cls):
@@ -55,6 +55,7 @@ class StockSymbol:
         self.symbol2: str = symbol_data.get("symbol2")
         self.type: str = symbol_data.get("type")
         self.data_date = datetime.now()
+        self.finnhub_symbol = 1
 
         # Symbol itself may no be unique across exchanges
         # Combination of symbol and mic should be a unique identifier
@@ -88,7 +89,7 @@ class StockSymbol:
         return (self.currency,self.description,self.displaySymbol,self.figi,self.mic,self.shareClassFIGI,self.symbol,self.symbol2,self.type)
     
     def get_persist_data(self) -> Tuple[Any]:
-        return self.get_hash_data() + (self._md5, self.data_date, self._id)
+        return self.get_hash_data() + (self.finnhub_symbol, self._md5, self.data_date, self._id)
     
 @cacheinit
 class Exchange:
