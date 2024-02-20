@@ -7,6 +7,7 @@ import traceback
 import configparser
 import pandas as pd
 import concurrent.futures
+from requests.exceptions import ReadTimeout
 from datetime import date, timedelta, datetime
 from typing import Tuple, List, Any, Dict, Optional, Callable, Set
 
@@ -95,15 +96,18 @@ def rate_limit(func: Callable):
         ret = None
         try:
             ret = func(self,*args, **kwargs)
-        except (finnhub.FinnhubAPIException, finnhub.FinnhubRequestException) as ex:
+        except (finnhub.FinnhubAPIException, finnhub.FinnhubRequestException, ReadTimeout) as ex:
             logger.error("FinnHub request failed")
             logger.error(ex)
             if isinstance(ex,finnhub.FinnhubAPIException) and ex.status_code==403:
                 logger.error("403 Error encountered for request. Skipping request and continuing")
             else:
+                except_sleep_time = 1
+                if isinstance(ex,ReadTimeout):
+                    except_sleep_time = 900
                 logger.error("Opening new FinnHub client")
                 self._finnhub_client.close()
-                time.sleep(1)
+                time.sleep(except_sleep_time)
                 self._finnhub_client = finnhub.Client(api_key=API_KEY)
                 logger.error("retrying request")
                 ret = func(self,*args, **kwargs)
