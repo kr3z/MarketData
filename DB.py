@@ -5,6 +5,8 @@ import os
 import threading
 import logging
 
+from sqlalchemy import create_engine, URL
+
 logger = logging.getLogger('DB')
 
 WORKING_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -16,6 +18,19 @@ db_host=config.get("db", "db_host")
 db_name=config.get("db", "db_name")
 db_user=config.get("db", "user")
 db_password=config.get("db", "password")
+
+#engine = create_engine("mysql+mysqldb://@localhost/test", echo=True)
+
+sqlalchemy_url = URL.create(
+    "mysql+mysqldb",
+    username=db_user,
+    password=db_password,
+    host=db_host,
+    database=db_name,
+)
+
+#engine = create_engine(sqlalchemy_url, pool_pre_ping=True, echo=True)
+#connection = engine.connect()
 
 class DBConnection():
     _open_connections = []

@@ -1,14 +1,19 @@
 import os
 import logging
-import logging.config
+#import logging.config
 import traceback
 import pandas as pd
 import urllib.request
+
+from sqlalchemy import select
+
 from FinnHubClasses import Exchange
-from DB import DBConnection
+#from DB import DBConnection
+
+from Base import Session
 
 WORKING_DIR = os.path.dirname(os.path.realpath(__file__))
-logging.config.fileConfig(WORKING_DIR+os.sep+'logging.conf')
+#logging.config.fileConfig(WORKING_DIR+os.sep+'logging.conf')
 logger = logging.getLogger('MIC')
 ISO10383_URL = "https://www.iso20022.org/sites/default/files/ISO10383_MIC/ISO10383_MIC.csv"
 ISO10383_PATH = WORKING_DIR+os.path.sep+'stage'+os.path.sep+'ISO10383_MIC.csv'
@@ -23,8 +28,19 @@ def download_iso10383() -> str:
 def import_iso10383(filename: str) -> None:
     logger.debug("Importing data from: %s", filename)
     csvFile = pd.read_csv(filename, encoding='latin-1')
-    exchanges = Exchange.parse_exchanges(csvFile.astype(object).where(pd.notnull(csvFile),None))
-    logger.debug("Parsed %d Exchanges", len(exchanges))
+    existing_data, new_exchanges = Exchange.parse_exchanges(csvFile.astype(object).where(pd.notnull(csvFile),None))
+    existing_ids =  set(existing_data.keys())
+    with Session() as session:
+        logger.debug("Comparing %d Existing Exchanges", len(existing_ids))
+        exisiting_exchanges = session.scalars(select(Exchange).where(Exchange.id.in_(existing_ids))).all()
+        for existing_exchange in exisiting_exchanges:
+                existing_exchange.compare(existing_data[existing_exchange.id])
+
+        logger.debug("Importing %d New Exchanges", len(new_exchanges))
+        session.add_all(new_exchanges)
+        session.commit()
+
+    """ logger.debug("Parsed %d Exchanges", len(exchanges))
     new_ex = []
     update_ex = []
     for ex in exchanges:
@@ -48,7 +64,7 @@ def import_iso10383(filename: str) -> None:
         logger.error(error)
         traceback.print_exc()
         if conn is not None:
-            conn.rollback()
+            conn.rollback() """
 
 #filename = download_iso10383()
 #import_iso10383(filename)
