@@ -125,3 +125,5 @@ dmypy.json
 
 stage/
 config.properties
+old_files/
+test*.py

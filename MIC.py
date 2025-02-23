@@ -2,8 +2,10 @@ import os
 import logging
 #import logging.config
 import traceback
+import numpy as np
 import pandas as pd
 import urllib.request
+from typing import cast, Set
 
 from sqlalchemy import select
 
@@ -28,7 +30,36 @@ def download_iso10383() -> str:
 def import_iso10383(filename: str) -> None:
     logger.debug("Importing data from: %s", filename)
     csvFile = pd.read_csv(filename, encoding='latin-1')
-    existing_data, new_exchanges = Exchange.parse_exchanges(csvFile.astype(object).where(pd.notnull(csvFile),None))
+    csvFile = csvFile.replace({np.nan: None})
+    mic_df = csvFile.set_index('MIC')
+
+    mics = mic_df.index.to_list()
+    existing_exchanges = cast(Set[Exchange],Exchange.get_all_from_cache(mics, 'mic'))
+    existing_mics = [existing_exchange.mic for existing_exchange in existing_exchanges]
+    new_mics = [mic for mic in mics if mic not in existing_mics]
+
+    logger.debug(f"Found {len(new_mics)} New Exchanges")
+    logger.debug(f"Comparing {len(existing_mics)} Existing Exchanges")
+
+    with Session() as session:
+        for exchange in existing_exchanges:
+            if exchange.compare(mic_df.loc[exchange.mic]):
+                session.merge(exchange)
+        session.flush()
+
+        new_exchanges = Exchange.parse_data(mic_df.loc[new_mics])
+        session.add_all(new_exchanges)
+        session.flush()
+
+        """no_longer_finnhub_symbols = session.scalars(select(StockSymbol).where(StockSymbol.finnhub_symbol==1, StockSymbol.id.not_in(uids))).all()
+        for symbol in no_longer_finnhub_symbols:
+            symbol.finnhub_symbol = 0"""
+         
+        session.commit()
+    
+
+
+    """ existing_data, new_exchanges = Exchange.parse_exchanges(csvFile.astype(object).where(pd.notnull(csvFile),None))
     existing_ids =  set(existing_data.keys())
     with Session() as session:
         logger.debug("Comparing %d Existing Exchanges", len(existing_ids))
@@ -38,7 +69,7 @@ def import_iso10383(filename: str) -> None:
 
         logger.debug("Importing %d New Exchanges", len(new_exchanges))
         session.add_all(new_exchanges)
-        session.commit()
+        session.commit() """
 
     """ logger.debug("Parsed %d Exchanges", len(exchanges))
     new_ex = []

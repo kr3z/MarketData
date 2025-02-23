@@ -9,9 +9,9 @@ import pandas as pd
 #import concurrent.futures
 from requests.exceptions import ReadTimeout
 from datetime import date, timedelta, datetime
-from typing import Tuple, List, Any, Dict, Optional, Callable, Set
+from typing import Tuple, List, Any, Dict, Optional, Callable, Set, cast
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 #from sqlalchemy.orm import 
 
 #from DB import DBConnection
@@ -50,7 +50,7 @@ def rate_limit(func: Callable):
             else:
                 except_sleep_time = 1
                 if isinstance(ex,ReadTimeout):
-                    except_sleep_time = 900
+                    except_sleep_time = 10
                 logger.error("Opening new FinnHub client")
                 self._finnhub_client.close()
                 time.sleep(except_sleep_time)
@@ -66,8 +66,12 @@ def rate_limit(func: Callable):
 
 class FinnHubClientWrapper:
     _last_req: int = 0
+
+    _finnhub_client: Optional[finnhub.Client]
+    _market_status: Optional[MarketStatus]
+
     def __init__(self):
-        self._finnhub_client: finnhub.Client = None
+        self._finnhub_client = None
 
 #FinnhubAPIException
 
@@ -75,8 +79,37 @@ class FinnHubClientWrapper:
     def update_stock_symbols(self) -> None:
 
         stock_symbols = self._finnhub_client.stock_symbols('US')
+        symbols_df = pd.DataFrame(stock_symbols)
+        symbols_df['uid'] = symbols_df['symbol'] + symbols_df['mic']
+        symbols_df.set_index('uid', inplace=True)
+        uids = symbols_df.index.to_list()
+        existing_symbols = cast(Set[StockSymbol],StockSymbol.get_all_from_cache(uids, 'uid'))
+        existing_uids = [existing_symbol.uid for existing_symbol in existing_symbols]
+        new_uids = [uid for uid in uids if uid not in existing_uids]
 
-        existing_data, new_symbols = StockSymbol.parse_symbols(stock_symbols)
+        logger.info(f"Found {len(new_uids)} New Symbols")
+        logger.info(f"Comparing {len(existing_uids)} Existing Symbol")
+
+        with Session() as session:
+            for symbol in existing_symbols:
+                if symbol.compare(symbols_df.loc[symbol.uid]):
+                    session.merge(symbol)
+            session.flush()
+
+            new_symbols = StockSymbol.parse_data(symbols_df.loc[new_uids])
+            session.add_all(new_symbols)
+            session.flush()
+
+            no_longer_finnhub_symbols = session.scalars(select(StockSymbol).where(StockSymbol.finnhub_symbol==1, StockSymbol.uid.not_in(uids))).all()
+            logger.info(f"Found {len(no_longer_finnhub_symbols)} Symbols that are no longer finnhub symbols")
+            for symbol in no_longer_finnhub_symbols:
+                symbol.finnhub_symbol = 0
+            
+            session.commit()
+            
+
+
+        """ existing_data, new_symbols = StockSymbol.parse_symbols(stock_symbols)
         existing_ids = set(existing_data.keys())
         with Session() as session:
             # for each symbol that already exists in the DB, compare the current data to the existing and update if anything has changed
@@ -95,7 +128,7 @@ class FinnHubClientWrapper:
             for symbol in no_longer_finnhub_symbols:
                 symbol.FinnHubSymbol = 0
 
-            session.commit()
+            session.commit() """
 
     @rate_limit
     def market_status(self) -> MarketStatus:
@@ -104,11 +137,11 @@ class FinnHubClientWrapper:
         return status
     
     @rate_limit
-    def get_quote(self, symbol: str, symbol_key: int) -> FinnHubQuote:
+    def get_quote(self, symbol: str) -> FinnHubQuote:
         quote_data = self._finnhub_client.quote(symbol)
         quote = None
         if int(quote_data.get("t")) > 0:
-            quote = FinnHubQuote(quote_data,symbol_key)
+            quote = FinnHubQuote(quote_data)
         return quote
 
     def update_quotes(self) -> None:
@@ -131,9 +164,9 @@ class FinnHubClientWrapper:
         GROUP BY s.id,s.symbol 
         HAVING IFNULL(quote_time,%s) < %s"""
         
-        max_quote_time = func.max(FinnHubQuote.quote_time).label('quote_time')
+        """ max_quote_time = func.max(FinnHubQuote.quote_time).label('quote_time')
         stmt = select(StockSymbol.id,StockSymbol.symbol, max_quote_time)\
-            .outerjoin(StockSymbol.quotes)\
+            .outerjoin(StockSymbol.finnhub_quotes)\
             .where(StockSymbol.FinnHubSymbol == 1)\
             .group_by(StockSymbol.id,StockSymbol.symbol)\
             .having(func.ifnull(max_quote_time,date(1900,1,1)) < quote_day)
@@ -143,9 +176,41 @@ class FinnHubClientWrapper:
             res = session.execute(stmt).all()
             for symbol_key,symbol,quote_time in res:
                 if quote_time is None or quote_time.date() < quote_day:
-                    symbol_list.append((symbol_key,symbol,quote_time))
+                    symbol_list.append((symbol_key,symbol,quote_time)) """
+        
+        stmt = select(StockSymbol.id)\
+                .where(StockSymbol.finnhub_symbol ==1 )\
+                .where(or_(StockSymbol.last_finnhub_quote_check < quote_day,
+                           StockSymbol.last_finnhub_quote_check == None))
+        
+        with Session() as session:
+            res = session.scalars(stmt).all()
+            ids = [id for id in res]
 
-        quote_list = []
+        for id in ids:
+            symbol = cast(StockSymbol,StockSymbol.get_from_cache(id,'id'))
+            logger.debug(f"Getting quote for symbol: {symbol.symbol}")
+            quote = cast(FinnHubQuote,self.get_quote(symbol.symbol))
+            with Session() as session:
+                if quote and (symbol.last_finnhub_quote_check is None or quote.quote_time > symbol.last_finnhub_quote_check):
+                    logger.debug(f"Persisting quote for symbol: {symbol.symbol}")
+                    quote.symbol_key = symbol.id
+                    quote.symbol = symbol
+                    # Normally it would be better to collect these quotes and insert them as a batch to prevent excessive inserts
+                    # But we have to wait 1 sec per API call so it doesn't really matter
+                    session.add(quote)
+                    session.flush()
+                    logger.debug(f"Persisted quote for symbol: {symbol.symbol}")
+
+                logger.debug(f"Updating last check time for symbol: {symbol.symbol}")
+                symbol = session.merge(symbol)
+                StockSymbol.add_to_cache(symbol)
+                symbol.last_finnhub_quote_check = datetime.now()
+                session.commit()
+
+
+
+        """ quote_list = []
         for symbol_key,symbol,quote_time in symbol_list:
             logger.debug("Getting quote for symbol: %s",symbol)
             quote = self.get_quote(symbol,symbol_key)
@@ -164,7 +229,7 @@ class FinnHubClientWrapper:
                 logger.debug("Persisting %s quotes", len(quote_list))
                 session.add_all(quote_list)
                 session.commit()
-                quote_list = []
+                quote_list = [] """
         
 #SELECT s.id,s.symbol,max(q.quote_time) as quote_time 
 #FROM Symbol s 
