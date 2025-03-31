@@ -95,6 +95,7 @@ class StockSymbol(CacheableDBObject):
     #update_time: Mapped[datetime] = mapped_column(DateTime,server_default=func.CURRENT_TIMESTAMP())
     #update_count: Mapped[int] = mapped_column(Integer,server_default=text("0"))
     last_finnhub_quote_check: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    #last_finnhub_quote_check: Mapped[Optional[date]] = mapped_column(Date)
     last_yahoo_quote_check: Mapped[Optional[datetime]] = mapped_column(DateTime)
     create_stamp: Mapped[datetime] = mapped_column(DateTime, sort_order=100, default=datetime.now)
     update_count: Mapped[int] = mapped_column(Integer, sort_order=101, default=0)
